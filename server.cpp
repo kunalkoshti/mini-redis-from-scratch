@@ -12,6 +12,48 @@
 
 using namespace std;
 
+const size_t k_max_msg_size = 4096;
+
+static int32_t one_request(int connfd)
+{
+    char rbuf[4 + k_max_msg_size];
+    errno = 0;
+    int32_t err = read_full(connfd, rbuf, 4);
+    if (err == -1)
+    {
+        msg(errno == 0 ? "unexpected EOF error" : "recv() error");
+        return -1;
+    }
+    uint32_t len = 0;
+    memcpy(&len, rbuf, 4);
+    len = ntohl(len);
+    if (len > k_max_msg_size)
+    {
+        msg("message too big");
+        return -1;
+    }
+    err = read_full(connfd, &rbuf[4], len);
+    if (err == -1)
+    {
+        msg(errno == 0 ? "unexpected EOF error" : "recv() error");
+        return -1;
+    }
+    printf("client says: %.*s\n", len, &rbuf[4]);
+    const char *response = "Hello from server!\n";
+    char wbuf[4 + strlen(response)];
+    uint32_t wlen = (uint32_t)strlen(response);
+    uint32_t net_wlen = htonl(wlen);
+    memcpy(wbuf, &net_wlen, 4);
+    memcpy(&wbuf[4], response, wlen);
+    err = write_full(connfd, wbuf, 4 + wlen);
+    if (err == -1)
+    {
+        msg("send() error");
+        return -1;
+    }
+    return 0;
+}
+
 void do_something(int fd)
 {
     char buf[100];
@@ -86,7 +128,14 @@ int main()
             continue;
         }
         fprintf(stdout, "server: got connection\n");
-        do_something(new_fd);
+        while (true)
+        {
+            int32_t err = one_request(new_fd);
+            if (err == -1)
+            {
+                break;
+            }
+        }
         close(new_fd);
     }
     return 0;
