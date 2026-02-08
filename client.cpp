@@ -8,8 +8,54 @@
 #include "utils.h"
 
 #define PORT "1234"
+const size_t k_max_msg = 4096;
+const int msg_ct = 10;
 
 using namespace std;
+
+static int32_t query(int fd, const char *text)
+{
+    uint32_t len = (uint32_t)strlen(text);
+    if (len > k_max_msg)
+    {
+        msg("message too big");
+        return -1;
+    }
+    char wbuf[4 + k_max_msg];
+    uint32_t netlen = htonl(len);
+    memcpy(wbuf, &netlen, 4);
+    memcpy(&wbuf[4], text, len);
+    int32_t err = write_full(fd, wbuf, 4 + len);
+    if (err == -1)
+    {
+        msg("send() error");
+        return -1;
+    }
+    char rbuf[4 + k_max_msg];
+    errno = 0;
+    err = read_full(fd, rbuf, 4);
+    if (err == -1)
+    {
+        msg(errno == 0 ? "unexpected EOF error" : "recv() error");
+        return -1;
+    }
+    uint32_t rlen = 0;
+    memcpy(&rlen, rbuf, 4);
+    rlen = ntohl(rlen);
+    if (rlen > k_max_msg)
+    {
+        msg("message too big");
+        return -1;
+    }
+    err = read_full(fd, &rbuf[4], rlen);
+    if (err == -1)
+    {
+        msg(errno == 0 ? "unexpected EOF error" : "recv() error");
+        return -1;
+    }
+    printf("server says: %.*s\n", rlen, &rbuf[4]);
+    return 0;
+}
 
 int main()
 {
@@ -44,18 +90,14 @@ int main()
     {
         die("Failed to connect");
     }
-    const char *request = "Hello from client!\n";
-    if (send(sock_fd, request, strlen(request), 0) == -1)
+    for (int i = 0; i < msg_ct; i++)
     {
-        die("send() error");
+        string s = "client says: Hello " + to_string(i) + "!";
+        if (query(sock_fd, s.c_str()) == -1)
+        {
+            break;
+        }
     }
-    char buf[100];
-    ssize_t n = recv(sock_fd, buf, sizeof buf, 0);
-    if (n == -1)
-    {
-        die("recv() error");
-    }
-    fprintf(stdout, "Received: %.*s\n", (int)n, buf);
     close(sock_fd);
     return 0;
 }
