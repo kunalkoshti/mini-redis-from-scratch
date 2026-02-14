@@ -5,10 +5,12 @@
 #include <unistd.h>
 #include <netdb.h>
 #include <errno.h>
+#include <vector>
+#include <string>
 #include "utils.h"
 
 #define PORT "1234"
-const size_t k_max_msg = 4096;
+const size_t k_max_msg = 32 << 20;
 const int msg_ct = 10;
 
 using namespace std;
@@ -21,26 +23,27 @@ static int32_t query(int fd, const char *text)
         msg("message too big");
         return -1;
     }
-    char wbuf[4 + k_max_msg];
+    std::vector<char> wbuf(4 + len);
+    ;
     uint32_t netlen = htonl(len);
-    memcpy(wbuf, &netlen, 4);
+    memcpy(wbuf.data(), &netlen, 4);
     memcpy(&wbuf[4], text, len);
-    int32_t err = write_full(fd, wbuf, 4 + len);
+    int32_t err = write_full(fd, wbuf.data(), 4 + len);
     if (err == -1)
     {
         msg("send() error");
         return -1;
     }
-    char rbuf[4 + k_max_msg];
+    std::vector<char> rbuf(4 + k_max_msg);
     errno = 0;
-    err = read_full(fd, rbuf, 4);
+    err = read_full(fd, rbuf.data(), 4);
     if (err == -1)
     {
         msg(errno == 0 ? "unexpected EOF error" : "recv() error");
         return -1;
     }
     uint32_t rlen = 0;
-    memcpy(&rlen, rbuf, 4);
+    memcpy(&rlen, rbuf.data(), 4);
     rlen = ntohl(rlen);
     if (rlen > k_max_msg)
     {
@@ -90,10 +93,16 @@ int main()
     {
         die("Failed to connect");
     }
-    for (int i = 0; i < msg_ct; i++)
+    std::vector<std::string> query_list = {
+        "hello1",
+        "hello2",
+        "hello3",
+        std::string(k_max_msg, 'z'), // requires multiple event loop iterations
+        "hello5",
+    };
+    for (const std::string &q : query_list)
     {
-        string s = "client says: Hello " + to_string(i) + "!";
-        if (query(sock_fd, s.c_str()) == -1)
+        if (query(sock_fd, q.c_str()) == -1)
         {
             break;
         }
