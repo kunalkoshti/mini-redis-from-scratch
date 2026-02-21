@@ -14,8 +14,9 @@ const size_t k_max_msg = 32 << 20;
 
 using namespace std;
 
-// Encode a list of strings into the protocol format:
-// nstr | len1 | str1 | len2 | str2 | ...
+/**
+ * Encodes a command into the binary protocol format.
+ */
 static void encode_cmd(vector<uint8_t> &out, const vector<string> &cmd) {
   uint32_t nstr = htonl(cmd.size());
   out.insert(out.end(), (uint8_t *)&nstr, (uint8_t *)&nstr + 4);
@@ -46,7 +47,6 @@ static int32_t query(int fd, const vector<string> &cmd) {
     return -1;
   }
 
-  // Read response
   uint32_t rlen_net = 0;
   if (read_full(fd, (char *)&rlen_net, 4) != 0) {
     msg(errno == 0 ? "unexpected EOF error" : "recv() header error");
@@ -64,7 +64,6 @@ static int32_t query(int fd, const vector<string> &cmd) {
     return -1;
   }
 
-  // The first 4 bytes of the response are the status
   uint32_t rescode = 0;
   if (rlen >= 4) {
     memcpy(&rescode, rbuf.data(), 4);

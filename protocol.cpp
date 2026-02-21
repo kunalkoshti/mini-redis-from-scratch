@@ -25,10 +25,9 @@ static bool read_str(const uint8_t *&cur, const uint8_t *end, size_t n,
   return true;
 }
 
-// +------+-----+------+-----+------+-----+-----+------+
-// | nstr | len | str1 | len | str2 | ... | len | strn |
-// +------+-----+------+-----+------+-----+-----+------+
-
+/**
+ * Request format: [n_args (4 bytes)] [[len (4 bytes)] [arg (len bytes)]]...
+ */
 static int32_t parse_req(const uint8_t *data, size_t size,
                          std::vector<std::string> &out) {
   const uint8_t *end = data + size;
@@ -38,7 +37,7 @@ static int32_t parse_req(const uint8_t *data, size_t size,
   }
   nstr = ntohl(nstr);
   if (nstr > k_max_args) {
-    return -1; // safety limit
+    return -1;
   }
 
   while (out.size() < nstr) {
@@ -46,45 +45,52 @@ static int32_t parse_req(const uint8_t *data, size_t size,
     if (!read_u32(data, end, len)) {
       return -1;
     }
-    len = ntohl(len); // FIX: convert length from network byte order to host
+    len = ntohl(len);
     out.push_back(std::string());
     if (!read_str(data, end, len, out.back())) {
       return -1;
     }
   }
   if (data != end) {
-    return -1; // trailing garbage
+    return -1;
   }
   return 0;
 }
 
-// Response::status
+/**
+ * Status codes for response headers.
+ */
 enum {
   RES_OK = 0,
-  RES_ERR = 1, // error
-  RES_NX = 2,  // key not found
+  RES_ERR = 1,
+  RES_NX = 2,
 };
 
-// placeholder; implemented later
 static std::map<std::string, std::string> g_data;
 
+/**
+ * Global application logic for processing commands.
+ * Implements GET, SET, and DEL.
+ */
 static bool do_request(std::vector<std::string> &cmd, Buffer &out) {
   uint32_t status = RES_OK;
-  const std::string *val = nullptr; // Use a pointer to avoid copying strings!
+
+  // Direct pointer to avoid unnecessary string copies on GET
+  const std::string *val = nullptr;
 
   if (cmd.size() == 2 && cmd[0] == "get") {
     auto it = g_data.find(cmd[1]);
     if (it == g_data.end()) {
-      status = RES_NX; // not found
+      status = RES_NX;
     } else {
-      val = &it->second; // Point safely to the value in the map
+      val = &it->second;
     }
   } else if (cmd.size() == 3 && cmd[0] == "set") {
     g_data[cmd[1]].swap(cmd[2]);
   } else if (cmd.size() == 2 && cmd[0] == "del") {
     g_data.erase(cmd[1]);
   } else {
-    status = RES_ERR; // unrecognized command
+    status = RES_ERR;
   }
 
   uint32_t val_size = val ? val->size() : 0;
@@ -105,38 +111,40 @@ static bool do_request(std::vector<std::string> &cmd, Buffer &out) {
   return true;
 }
 
-// process 1 request if there is enough data
+/**
+ * Attempts to parse and process one request from the connection buffer.
+ *
+ * @param conn Client connection structure.
+ * @return 1 on success, 0 if data is incomplete, -1 on protocol error.
+ */
 int try_one_request(Conn *conn) {
-  // try to parse the protocol: message header
   if (conn->incoming.size() < 4) {
-    return 0; // want read
+    return 0;
   }
   uint32_t len = 0;
   memcpy(&len, conn->incoming.data(), 4);
   len = ntohl(len);
   if (len > k_max_msg) {
     msg("too long");
-    return -1; // want close
+    return -1;
   }
-  // message body
   if (4 + len > conn->incoming.size()) {
-    return 0; // want read
+    return 0;
   }
   const uint8_t *request = conn->incoming.data() + 4;
 
-  // got one request, do some application logic
   std::vector<std::string> cmd;
   if (parse_req(request, len, cmd) < 0) {
     msg("bad request");
-    return -1; // want close
+    return -1;
   }
+
+  // Process request and write response to outgoing buffer
   if (!do_request(cmd, conn->outgoing)) {
     msg("failed to process request");
     return -1;
   }
 
-  // application logic done! remove the request message.
   conn->incoming.consume(4 + len);
-  // Q: Why not just empty the buffer? See the explanation of "pipelining".
-  return 1; // success
+  return 1;
 }
