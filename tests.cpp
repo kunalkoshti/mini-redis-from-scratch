@@ -1,4 +1,4 @@
-#include "utils.h" // Using your provided utils
+#include "utils.h"
 #include <algorithm>
 #include <assert.h>
 #include <cstring>
@@ -9,12 +9,29 @@
 #include <unistd.h>
 #include <vector>
 
-// Helper to wrap your utils for std::string/vector
-void send_request(int fd, const std::string &data) {
-  uint32_t len = htonl(data.size());
+const size_t k_max_msg = 32 << 20;
+
+// Helper to encode a string array into buffer
+static void encode_cmd(std::vector<uint8_t> &out,
+                       const std::vector<std::string> &cmd) {
+  uint32_t nstr = htonl(cmd.size());
+  out.insert(out.end(), (uint8_t *)&nstr, (uint8_t *)&nstr + 4);
+
+  for (const std::string &s : cmd) {
+    uint32_t len = htonl(s.size());
+    out.insert(out.end(), (uint8_t *)&len, (uint8_t *)&len + 4);
+    out.insert(out.end(), s.data(), s.data() + s.size());
+  }
+}
+
+void send_request(int fd, const std::vector<std::string> &cmd) {
+  std::vector<uint8_t> req;
+  encode_cmd(req, cmd);
+
+  uint32_t len = htonl(req.size());
   if (write_full(fd, (char *)&len, 4) != 0)
     die("write_full header");
-  if (write_full(fd, data.data(), data.size()) != 0)
+  if (write_full(fd, (char *)req.data(), req.size()) != 0)
     die("write_full body");
 }
 
@@ -24,10 +41,17 @@ std::string read_response(int fd) {
     die("read_full header");
   uint32_t len = ntohl(len_net);
 
+  if (len > k_max_msg)
+    die("response too big");
+
   std::vector<char> buf(len);
   if (read_full(fd, buf.data(), len) != 0)
     die("read_full body");
-  return std::string(buf.begin(), buf.end());
+
+  // Skip the 4-byte status code in the response
+  if (len < 4)
+    return "";
+  return std::string(buf.begin() + 4, buf.end());
 }
 
 int main() {
@@ -44,47 +68,52 @@ int main() {
     die("connect");
 
   // --- TEST 1: Pipelining (Multiple requests in one write) ---
-  // This tests if your server's while(try_one_request) loop works.
   std::cout << "[Test 1] Pipelining (3-in-1)... ";
-  std::string pipe_data;
+  std::vector<uint8_t> pipe_data;
   for (int i = 1; i <= 3; ++i) {
-    uint32_t len = htonl(6);
-    pipe_data.append((char *)&len, 4);
-    pipe_data.append("ping_" + std::to_string(i));
+    std::vector<std::string> req = {"set", "k" + std::to_string(i),
+                                    "v" + std::to_string(i)};
+    std::vector<uint8_t> raw_req;
+    encode_cmd(raw_req, req);
+
+    uint32_t len = htonl(raw_req.size());
+    pipe_data.insert(pipe_data.end(), (uint8_t *)&len, (uint8_t *)&len + 4);
+    pipe_data.insert(pipe_data.end(), raw_req.begin(), raw_req.end());
   }
-  if (write_full(fd, pipe_data.data(), pipe_data.size()) != 0)
+  if (write_full(fd, (char *)pipe_data.data(), pipe_data.size()) != 0)
     die("write");
 
   for (int i = 1; i <= 3; ++i) {
-    assert(read_response(fd) == "ping_" + std::to_string(i));
+    assert(read_response(fd) == ""); // SET returns empty string
   }
   std::cout << "PASSED" << std::endl;
 
   // --- TEST 2: Fragmentation (Sending 1 byte at a time) ---
-  // This tests if your server correctly buffers partial data when EAGAIN hits.
   std::cout << "[Test 2] Fragmentation (Byte-by-Byte)... ";
-  std::string msg = "fragment";
-  uint32_t msg_len = htonl(msg.size());
+  std::vector<uint8_t> frag_req;
+  encode_cmd(frag_req, {"get", "k1"});
+  uint32_t frag_msg_len = htonl(frag_req.size());
 
   // Send header slowly
   for (int i = 0; i < 4; ++i) {
-    write(fd, (char *)&msg_len + i, 1);
+    write(fd, (char *)&frag_msg_len + i, 1);
     usleep(1000);
   }
   // Send body slowly
-  for (char c : msg) {
+  for (uint8_t c : frag_req) {
     write(fd, &c, 1);
     usleep(1000);
   }
-  assert(read_response(fd) == "fragment");
+  assert(read_response(fd) == "v1");
   std::cout << "PASSED" << std::endl;
 
   // --- TEST 3: Large Payload (32MB) ---
-  // This tests your mmap/vector growth and partial write() handling.
   std::cout << "[Test 3] 32MB Data Integrity... ";
-  std::string big_data(32 * 1024 * 1024, 'z');
-  send_request(fd, big_data);
+  std::string big_data(31 * 1024 * 1024, 'z');
+  send_request(fd, {"set", "bigkey", big_data});
+  read_response(fd); // drain the "set" ACK
 
+  send_request(fd, {"get", "bigkey"});
   std::string resp = read_response(fd);
   assert(resp.size() == big_data.size());
   assert(resp == big_data);
@@ -97,8 +126,8 @@ int main() {
   for (int i = 0; i < 50; ++i) {
     int temp_fd = socket(AF_INET, SOCK_STREAM, 0);
     if (connect(temp_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
-      send_request(temp_fd, "quick");
-      assert(read_response(temp_fd) == "quick");
+      send_request(temp_fd, {"get", "k1"});
+      assert(read_response(temp_fd) == "v1");
     }
     close(temp_fd);
   }
@@ -113,14 +142,18 @@ int main() {
     for (int i = 0; i < 100; ++i) {
       int temp_fd = socket(AF_INET, SOCK_STREAM, 0);
       if (connect(temp_fd, (struct sockaddr *)&addr, sizeof(addr)) == 0) {
-        // Send a pipelined request but DO NOT read the response
-        std::string pipe_req;
-        uint32_t len = htonl(4);
-        pipe_req.append((char *)&len, 4);
-        pipe_req.append("spam");
-        pipe_req.append((char *)&len, 4);
-        pipe_req.append("spam");
-        write_full(temp_fd, pipe_req.data(), pipe_req.size());
+
+        std::vector<uint8_t> raw_req;
+        encode_cmd(raw_req, {"get", "k1"});
+        uint32_t len = htonl(raw_req.size());
+
+        std::vector<uint8_t> pipe_req;
+        pipe_req.insert(pipe_req.end(), (uint8_t *)&len, (uint8_t *)&len + 4);
+        pipe_req.insert(pipe_req.end(), raw_req.begin(), raw_req.end());
+        pipe_req.insert(pipe_req.end(), (uint8_t *)&len, (uint8_t *)&len + 4);
+        pipe_req.insert(pipe_req.end(), raw_req.begin(), raw_req.end());
+
+        write_full(temp_fd, (char *)pipe_req.data(), pipe_req.size());
         fds.push_back(temp_fd);
       }
     }
@@ -157,15 +190,13 @@ int main() {
     // Send a 1MB payload 10 times to fill up the OS buffers
     std::string mb_data(1024 * 1024, 'w');
     for (int i = 0; i < 10; ++i) {
-      uint32_t len = htonl(mb_data.size());
-      write_full(temp_fd, (char *)&len, 4);
-      write_full(temp_fd, mb_data.data(), mb_data.size());
+      send_request(temp_fd, {"set", "mb", mb_data});
     }
 
     // Now softly read the responses
     for (int i = 0; i < 10; ++i) {
       std::string resp = read_response(temp_fd);
-      assert(resp.size() == mb_data.size());
+      assert(resp.size() == 0); // SET returns empty
     }
     close(temp_fd);
   }
@@ -181,16 +212,18 @@ int main() {
       connect(clients[i], (struct sockaddr *)&addr, sizeof(addr));
     }
 
+    std::vector<uint8_t> raw_req;
+    encode_cmd(raw_req, {"get", "k1"});
+    uint32_t len = htonl(raw_req.size());
+
     // Wake server concurrently
-    std::string req = "batch";
-    uint32_t len = htonl(req.size());
     for (int i = 0; i < NUM_CLIENTS; ++i) {
       write(clients[i], (char *)&len, 4);
-      write(clients[i], req.data(), req.size());
+      write(clients[i], raw_req.data(), raw_req.size());
     }
 
     for (int i = 0; i < NUM_CLIENTS; ++i) {
-      assert(read_response(clients[i]) == "batch");
+      assert(read_response(clients[i]) == "v1");
       close(clients[i]);
     }
   }
@@ -210,6 +243,86 @@ int main() {
     usleep(100000);
   }
   std::cout << "PASSED (Server handled EOF)" << std::endl;
+
+  // --- TEST 10: Trailing Garbage (Protocol Parsing) ---
+  std::cout << "[Test 10] Trailing Garbage Check... ";
+  {
+    int temp_fd = socket(AF_INET, SOCK_STREAM, 0);
+    connect(temp_fd, (struct sockaddr *)&addr, sizeof(addr));
+
+    std::vector<std::string> req = {"get", "k1"};
+    std::vector<uint8_t> raw_req;
+    encode_cmd(raw_req, req);
+
+    // Add exactly 3 bytes of garbage to the end of the real payload size
+    raw_req.push_back('b');
+    raw_req.push_back('a');
+    raw_req.push_back('d');
+
+    uint32_t len = htonl(raw_req.size());
+    write_full(temp_fd, (char *)&len, 4);
+    write_full(temp_fd, (char *)raw_req.data(), raw_req.size());
+
+    // Server should immediately disconnect us
+    char dummy;
+    int rv = read(temp_fd, &dummy, 1);
+    assert(rv == 0 || (rv < 0 && errno == ECONNRESET));
+    close(temp_fd);
+  }
+  std::cout << "PASSED" << std::endl;
+
+  // --- TEST 11: Truncated String Attack (Buffer Overread) ---
+  std::cout << "[Test 11] Truncated String Parse Attack... ";
+  {
+    int temp_fd = socket(AF_INET, SOCK_STREAM, 0);
+    connect(temp_fd, (struct sockaddr *)&addr, sizeof(addr));
+
+    std::vector<uint8_t> raw_req;
+    uint32_t nstr = htonl(1);
+    raw_req.insert(raw_req.end(), (uint8_t *)&nstr, (uint8_t *)&nstr + 4);
+
+    // We claim the string is 5000 bytes long!
+    uint32_t fake_str_len = htonl(5000);
+    raw_req.insert(raw_req.end(), (uint8_t *)&fake_str_len,
+                   (uint8_t *)&fake_str_len + 4);
+
+    // But we only provide 2 bytes!
+    raw_req.push_back('x');
+    raw_req.push_back('y');
+
+    uint32_t len = htonl(raw_req.size());
+    write_full(temp_fd, (char *)&len, 4);
+    write_full(temp_fd, (char *)raw_req.data(), raw_req.size());
+
+    char dummy;
+    int rv = read(temp_fd, &dummy, 1);
+    assert(rv == 0 || (rv < 0 && errno == ECONNRESET));
+    close(temp_fd);
+  }
+  std::cout << "PASSED" << std::endl;
+
+  // --- TEST 12: k_max_args Limit Test ---
+  std::cout << "[Test 12] Max Args Limit Check... ";
+  {
+    int temp_fd = socket(AF_INET, SOCK_STREAM, 0);
+    connect(temp_fd, (struct sockaddr *)&addr, sizeof(addr));
+
+    std::vector<uint8_t> raw_req;
+    // We claim there are 5,000,000 arguments (larger than k_max_args)!
+    uint32_t huge_nstr = htonl(5000000);
+    raw_req.insert(raw_req.end(), (uint8_t *)&huge_nstr,
+                   (uint8_t *)&huge_nstr + 4);
+
+    uint32_t len = htonl(raw_req.size());
+    write_full(temp_fd, (char *)&len, 4);
+    write_full(temp_fd, (char *)raw_req.data(), raw_req.size());
+
+    char dummy;
+    int rv = read(temp_fd, &dummy, 1);
+    assert(rv == 0 || (rv < 0 && errno == ECONNRESET));
+    close(temp_fd);
+  }
+  std::cout << "PASSED" << std::endl;
 
   std::cout << "\nCongratulations! All standard and advanced tests passed. "
                "Your server logic is production-ready."
