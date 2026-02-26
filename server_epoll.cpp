@@ -41,7 +41,7 @@ int main() {
     die("Failed to bind");
 
   fd_set_nb(listen_fd);
-  if (listen(listen_fd, SOMAXCONN) == -1)
+  if (listen(listen_fd, 128) == -1)
     die("listen() error");
 
   printf("Server listening on port %s\n", PORT);
