@@ -88,3 +88,30 @@ bool Buffer::append(const uint8_t *src, size_t len) {
   data_end += len;
   return true;
 }
+
+uint8_t *Buffer::back() { return storage + data_end; }
+
+size_t Buffer::free_capacity() const { return cap - data_end; }
+
+bool Buffer::ensure_capacity(size_t len) {
+  if (free_capacity() < len) {
+    compact();
+    if (free_capacity() < len) {
+      // Grow by exactly the requested length (e.g. 64KB)
+      size_t new_cap = cap + len;
+
+      uint8_t *new_storage = (uint8_t *)realloc(storage, new_cap);
+      if (!new_storage)
+        return false;
+      storage = new_storage;
+      cap = new_cap;
+    }
+  }
+  return true;
+}
+
+void Buffer::advance(size_t len) {
+  data_end += len;
+  if (data_end > cap)
+    data_end = cap;
+}
