@@ -2,3 +2,6 @@ client
 server_poll
 server_epoll
 tests
+server 
+concurrent
+serial

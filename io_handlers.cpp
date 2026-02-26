@@ -4,6 +4,7 @@
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <netinet/tcp.h>
 #include <stdio.h>
 #include <sys/epoll.h>
 #include <sys/socket.h>
@@ -36,6 +37,10 @@ std::unique_ptr<Conn> handle_accept(int listen_fd) {
           inet_ntop2(&ss, (char[INET6_ADDRSTRLEN]){}, INET6_ADDRSTRLEN));
 
   fd_set_nb(connfd);
+
+  int val = 1;
+  setsockopt(connfd, IPPROTO_TCP, TCP_NODELAY, &val, sizeof(val));
+
   auto conn = std::make_unique<Conn>();
   conn->fd = connfd;
   return conn;
