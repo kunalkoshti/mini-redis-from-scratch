@@ -32,13 +32,6 @@ public:
 
   void consume(size_t len);
   bool append(const uint8_t *data, size_t len);
-
-  // --- Refined Zero-Copy Interface ---
-  uint8_t *back();              // Pointer to where new data can be written
-  size_t free_capacity() const; // Remaining space in the current allocation
-  bool ensure_capacity(
-      size_t len);          // Grows in 64KB increments if free_capacity < len
-  void advance(size_t len); // Commits 'len' bytes of data
 };
 
 #endif
