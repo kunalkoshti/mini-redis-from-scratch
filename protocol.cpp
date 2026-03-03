@@ -1,6 +1,6 @@
 #include "protocol.h"
+#include "hashtable.h"
 #include "utils.h"
-#include <map>
 #include <string.h>
 
 const size_t k_max_msg = 32 << 20;
@@ -66,7 +66,66 @@ enum {
   RES_NX = 2,
 };
 
-static std::map<std::string, std::string> g_data;
+static struct {
+  HMap db; // top-level hashtable
+} g_data;
+
+// equality comparison for `struct Entry`
+static bool entry_eq(HNode *lhs, HNode *rhs) {
+  struct Entry *le = container_of(lhs, struct Entry, node);
+  struct Entry *re = container_of(rhs, struct Entry, node);
+  return le->key == re->key;
+}
+
+// FNV hash
+static uint64_t str_hash(const uint8_t *data, size_t len) {
+  uint32_t h = 0x811C9DC5;
+  for (size_t i = 0; i < len; i++) {
+    h = (h + data[i]) * 0x01000193;
+  }
+  return h;
+}
+
+static void do_get(std::string &str, const std::string *&out,
+                   uint32_t *status) {
+  Entry key;
+  key.key.swap(str);
+  key.node.hcode = str_hash((uint8_t *)key.key.data(), key.key.size());
+  HNode *node = hm_lookup(&g_data.db, &key.node, &entry_eq);
+  if (!node) {
+    *status = RES_NX;
+    return;
+  }
+  out = &container_of(node, Entry, node)->val;
+}
+
+static void do_set(std::string &key, std::string &val) {
+  Entry entry;
+  entry.key.swap(key);
+  entry.node.hcode = str_hash((uint8_t *)entry.key.data(), entry.key.size());
+  HNode *node = hm_lookup(&g_data.db, &entry.node, &entry_eq);
+  if (node) {
+    container_of(node, Entry, node)->val.swap(val);
+    return;
+  }
+  Entry *new_entry = new Entry();
+  new_entry->key.swap(entry.key);
+  new_entry->val.swap(val);
+  new_entry->node.hcode = entry.node.hcode;
+  hm_insert(&g_data.db, &new_entry->node);
+}
+
+static void do_del(std::string &key, uint32_t *status) {
+  Entry entry;
+  entry.key.swap(key);
+  entry.node.hcode = str_hash((uint8_t *)entry.key.data(), entry.key.size());
+  HNode *node = hm_delete(&g_data.db, &entry.node, &entry_eq);
+  if (!node) {
+    *status = RES_NX;
+    return;
+  }
+  delete container_of(node, Entry, node);
+}
 
 /**
  * Global application logic for processing commands.
@@ -79,21 +138,20 @@ static bool do_request(std::vector<std::string> &cmd, Buffer &out) {
   const std::string *val = nullptr;
 
   if (cmd.size() == 2 && cmd[0] == "get") {
-    auto it = g_data.find(cmd[1]);
-    if (it == g_data.end()) {
-      status = RES_NX;
-    } else {
-      val = &it->second;
-    }
+    do_get(cmd[1], val, &status);
   } else if (cmd.size() == 3 && cmd[0] == "set") {
-    g_data[cmd[1]].swap(cmd[2]);
+    do_set(cmd[1], cmd[2]);
   } else if (cmd.size() == 2 && cmd[0] == "del") {
-    g_data.erase(cmd[1]);
+    do_del(cmd[1], &status);
   } else {
     status = RES_ERR;
   }
 
   uint32_t val_size = val ? val->size() : 0;
+  if (val_size > k_max_msg) {
+    msg("value too large");
+    return false;
+  }
   uint32_t resp_len = 4 + val_size;
   resp_len = htonl(resp_len);
 
