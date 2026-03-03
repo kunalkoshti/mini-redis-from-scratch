@@ -2,7 +2,11 @@
 #define UTILS_H
 
 #include <arpa/inet.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <sys/socket.h>
+
+#define container_of(ptr, T, member) ((T *)((char *)ptr - offsetof(T, member)))
 
 void msg(const char *m);
 void msg_errno(const char *msg);

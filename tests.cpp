@@ -122,6 +122,52 @@ int main() {
   assert(resp == big_data);
   std::cout << "PASSED" << std::endl;
 
+  std::cout << "[Test 3.1] Hashmap: Get Non-Existent Key... ";
+  send_request(fd, {"get", "does_not_exist"});
+  // Expect empty string (since our read_response returns "" for RES_NX/empty)
+  assert(read_response(fd) == "");
+  std::cout << "PASSED" << std::endl;
+
+  std::cout << "[Test 3.2] Hashmap: Update Existing Key... ";
+  send_request(fd, {"set", "update_key", "val1"});
+  read_response(fd);
+  send_request(fd, {"set", "update_key", "val2"}); // Overwrite
+  read_response(fd);
+  send_request(fd, {"get", "update_key"});
+  assert(read_response(fd) == "val2");
+  std::cout << "PASSED" << std::endl;
+
+  std::cout << "[Test 3.3] Hashmap: Delete Key... ";
+  send_request(fd, {"del", "update_key"});
+  read_response(fd); // Should be OK
+  send_request(fd, {"get", "update_key"});
+  assert(read_response(fd) == ""); // Should be RES_NX
+  std::cout << "PASSED" << std::endl;
+
+  std::cout << "[Test 3.4] Hashmap: Empty Keys & Values... ";
+  send_request(fd, {"set", "", ""});
+  read_response(fd);
+  send_request(fd, {"get", ""});
+  assert(read_response(fd) == "");
+  std::cout << "PASSED" << std::endl;
+
+  std::cout << "[Test 3.5] Hashmap: Trigger Rehashing (1000 keys)... \n";
+  for (int i = 0; i < 1000; i++) {
+    send_request(fd,
+                 {"set", "key" + std::to_string(i), "val" + std::to_string(i)});
+    read_response(fd);
+    if (i % 100 == 0)
+      std::cout << "Inserted " << i << " keys\n";
+  }
+  // Verify a few elements to ensure rehashing didn't lose data
+  send_request(fd, {"get", "key0"});
+  assert(read_response(fd) == "val0");
+  send_request(fd, {"get", "key500"});
+  assert(read_response(fd) == "val500");
+  send_request(fd, {"get", "key999"});
+  assert(read_response(fd) == "val999");
+  std::cout << "PASSED" << std::endl;
+
   close(fd);
 
   std::cout << "[Test 4] Rapid Reconnect... ";
