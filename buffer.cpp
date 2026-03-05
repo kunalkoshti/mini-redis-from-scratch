@@ -65,6 +65,18 @@ void Buffer::consume(size_t len) {
   }
 }
 
+void Buffer::resize(size_t new_cap) {
+  if (new_cap <= cap) {
+    data_end = data_start + new_cap;
+    return;
+  }
+  uint8_t *new_storage = (uint8_t *)realloc(storage, new_cap);
+  if (!new_storage)
+    return; // OOM, keep existing buffer
+  storage = new_storage;
+  cap = new_cap;
+}
+
 // Returns false on allocation failure (OOM)
 bool Buffer::append(const uint8_t *src, size_t len) {
   // Check if we need more space
@@ -77,14 +89,22 @@ bool Buffer::append(const uint8_t *src, size_t len) {
       size_t new_cap = cap == 0 ? 1024 : cap;
       while (new_cap < data_end + len)
         new_cap *= 2;
-      uint8_t *new_storage = (uint8_t *)realloc(storage, new_cap);
-      if (!new_storage)
-        return false;
-      storage = new_storage;
-      cap = new_cap;
+      resize(new_cap);
     }
   }
   memcpy(storage + data_end, src, len);
   data_end += len;
   return true;
 }
+
+bool Buffer::append_u8(uint8_t val) { return append(&val, 1); }
+
+bool Buffer::append_u32(uint32_t val) {
+  return append((const uint8_t *)&val, 4);
+}
+
+bool Buffer::append_i64(int64_t val) {
+  return append((const uint8_t *)&val, 8);
+}
+
+bool Buffer::append_dbl(double val) { return append((const uint8_t *)&val, 8); }
