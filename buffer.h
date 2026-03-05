@@ -1,6 +1,4 @@
-#ifndef BUFFER_H
-#define BUFFER_H
-
+#pragma once
 #include <cstdint>
 #include <stddef.h>
 
@@ -28,10 +26,13 @@ public:
   uint8_t *data();
   const uint8_t *data() const;
   size_t size() const;
+  void resize(size_t new_cap);
   bool empty() const;
 
   void consume(size_t len);
   bool append(const uint8_t *data, size_t len);
+  bool append_u8(uint8_t val);
+  bool append_u32(uint32_t val);
+  bool append_i64(int64_t val);
+  bool append_dbl(double val);
 };
-
-#endif
