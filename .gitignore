@@ -2,4 +2,5 @@ client
 server_poll
 server_epoll
 tests
+tests_avl
 .vscode

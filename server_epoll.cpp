@@ -19,11 +19,11 @@ int main() {
   hints.ai_socktype = SOCK_STREAM;
   hints.ai_flags = AI_PASSIVE;
 
-  if (getaddrinfo(NULL, PORT, &hints, &res) != 0)
+  if (getaddrinfo(nullptr, PORT, &hints, &res) != 0)
     die("getaddrinfo");
 
   int listen_fd = -1;
-  for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
+  for (struct addrinfo *p = res; p != nullptr; p = p->ai_next) {
     listen_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
     if (listen_fd == -1)
       continue;
