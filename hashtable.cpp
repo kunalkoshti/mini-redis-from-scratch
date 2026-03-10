@@ -1,3 +1,13 @@
+/**
+ * @file hashtable.cpp
+ * @brief Intrusive hash table with incremental rehashing.
+ *
+ * Implements chained hashing with power-of-2 table sizes.
+ * When load factor exceeds the threshold, a new table is allocated
+ * and entries are migrated incrementally (k_rehashing_work per mutation)
+ * to avoid latency spikes.
+ */
+
 #include "hashtable.h"
 #include "utils.h"
 #include <cstdlib>
@@ -6,6 +16,7 @@ static const size_t k_initial_cap = 8;
 static const size_t k_max_load_factor = 8;
 static const size_t k_rehashing_work = 128;
 
+// Allocate and zero-initialize a hash table with n buckets (must be power of 2)
 static void h_init(HTab *h, size_t n) {
   if (n == 0 || (n & (n - 1)) != 0) {
     die("hashtable size (n) must be power of 2");
@@ -18,6 +29,7 @@ static void h_init(HTab *h, size_t n) {
   h->size = 0;
 }
 
+// Insert node at the head of its bucket chain
 static void h_insert(HTab *htab, HNode *node) {
   uint64_t pos = node->hcode & htab->mask;
   node->next = htab->tab[pos];
@@ -25,20 +37,22 @@ static void h_insert(HTab *htab, HNode *node) {
   htab->size++;
 }
 
+// Find the pointer-to-pointer for a matching node (for in-place detach)
 static HNode **h_lookup(HTab *htab, HNode *key, bool (*eq)(HNode *, HNode *)) {
   if (!htab->tab) {
-    return NULL;
+    return nullptr;
   }
   size_t pos = key->hcode & htab->mask;
   HNode **from = &htab->tab[pos];
-  for (HNode *curr; (curr = *from) != NULL; from = &curr->next) {
+  for (HNode *curr; (curr = *from) != nullptr; from = &curr->next) {
     if (curr->hcode == key->hcode && eq(curr, key)) {
       return from;
     }
   }
-  return NULL;
+  return nullptr;
 }
 
+// Unlink node from its bucket chain and return it
 static HNode *h_detach(HTab *htab, HNode **from) {
   HNode *node = *from;
   *from = node->next;
@@ -46,12 +60,14 @@ static HNode *h_detach(HTab *htab, HNode **from) {
   return node;
 }
 
+// Start rehashing: move current table to `older`, allocate a 2x `newer`
 static void hm_trigger_rehashing(HMap *hmap) {
   hmap->older = hmap->newer;
   h_init(&hmap->newer, hmap->newer.size * 2);
   hmap->migrate_pos = 0;
 }
 
+// Migrate up to k_rehashing_work entries from `older` to `newer`
 static void hm_help_rehashing(HMap *hmap) {
   size_t nwork = 0;
   while (nwork < k_rehashing_work && hmap->older.size > 0) {
@@ -69,14 +85,16 @@ static void hm_help_rehashing(HMap *hmap) {
   }
 }
 
+// Lookup in newer first, then older
 HNode *hm_lookup(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *)) {
   HNode **from = h_lookup(&(hmap->newer), key, eq);
   if (!from) {
     from = h_lookup(&(hmap->older), key, eq);
   }
-  return from ? *from : NULL;
+  return from ? *from : nullptr;
 }
 
+// Delete from newer or older, returns detached node or nullptr
 HNode *hm_delete(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *)) {
   if (HNode **from = h_lookup(&hmap->newer, key, eq)) {
     return h_detach(&hmap->newer, from);
@@ -84,9 +102,10 @@ HNode *hm_delete(HMap *hmap, HNode *key, bool (*eq)(HNode *, HNode *)) {
   if (HNode **from = h_lookup(&hmap->older, key, eq)) {
     return h_detach(&hmap->older, from);
   }
-  return NULL;
+  return nullptr;
 }
 
+// Insert into newer, trigger rehashing if load factor exceeded
 void hm_insert(HMap *hmap, HNode *node) {
   if (!hmap->newer.tab) {
     h_init(&hmap->newer, k_initial_cap);
@@ -101,6 +120,7 @@ void hm_insert(HMap *hmap, HNode *node) {
   hm_help_rehashing(hmap);
 }
 
+// Free both tables and reset the map to empty
 void hm_clear(HMap *hmap) {
   free(hmap->newer.tab);
   free(hmap->older.tab);
@@ -109,9 +129,10 @@ void hm_clear(HMap *hmap) {
 
 size_t hm_size(HMap *hmap) { return hmap->newer.size + hmap->older.size; }
 
+// Iterate all entries in a single table
 static bool h_foreach(HTab *htab, bool (*f)(HNode *, void *), void *arg) {
   for (size_t i = 0; htab->mask != 0 && i <= htab->mask; i++) {
-    for (HNode *node = htab->tab[i]; node != NULL; node = node->next) {
+    for (HNode *node = htab->tab[i]; node != nullptr; node = node->next) {
       if (!f(node, arg)) {
         return false;
       }
@@ -120,6 +141,7 @@ static bool h_foreach(HTab *htab, bool (*f)(HNode *, void *), void *arg) {
   return true;
 }
 
+// Iterate all entries across both tables
 bool hm_foreach(HMap *hmap, bool (*f)(HNode *, void *), void *arg) {
   return (h_foreach(&hmap->newer, f, arg) && h_foreach(&hmap->older, f, arg));
 }

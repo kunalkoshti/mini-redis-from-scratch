@@ -21,6 +21,7 @@
 #include "hashtable.h"
 #include "protocol.h"
 #include "serialization.h"
+#include "utils.h"
 #include <climits>
 #include <cmath>
 #include <errno.h>
@@ -84,7 +85,8 @@ static bool do_set_str(std::string &key, std::string &val, Buffer &out) {
   return out_nil(out);
 }
 
-// SETINT <key> <val> → parses val as int64, stores it. error if not a valid integer.
+// SETINT <key> <val> → parses val as int64, stores it. error if not a valid
+// integer.
 static bool do_set_int(std::string &key, std::string &val_str, Buffer &out) {
   char *end = nullptr;
   errno = 0;
@@ -150,8 +152,8 @@ static bool do_del(std::string &key, Buffer &out) {
   return out_int(out, node ? 1 : 0);
 }
 
-// INCR <key> → increments int64 value by 1. creates key with value 1 if missing.
-// errors on non-integer type or overflow.
+// INCR <key> → increments int64 value by 1. creates key with value 1 if
+// missing. errors on non-integer type or overflow.
 static bool do_incr(std::string &key, Buffer &out) {
   Entry entry;
   entry.key.swap(key);

@@ -205,7 +205,7 @@ int main(int argc, char **argv) {
     abort();
   }
   int sock_fd = -1;
-  for (struct addrinfo *p = res; p != NULL; p = p->ai_next) {
+  for (struct addrinfo *p = res; p != nullptr; p = p->ai_next) {
     sock_fd = socket(p->ai_family, p->ai_socktype, p->ai_protocol);
     if (sock_fd == -1)
       continue;
