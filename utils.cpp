@@ -1,12 +1,23 @@
 #include "utils.h"
 #include <arpa/inet.h>
 #include <assert.h>
+#include <cmath>
 #include <errno.h>
 #include <netdb.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <string>
 #include <unistd.h>
+
+// FNV hash
+uint64_t str_hash(const uint8_t *data, size_t len) {
+  uint32_t h = 0x811C9DC5;
+  for (size_t i = 0; i < len; i++) {
+    h = (h + data[i]) * 0x01000193;
+  }
+  return h;
+}
 
 void msg(const char *m) { fprintf(stderr, "%s\n", m); }
 
@@ -78,4 +89,19 @@ const char *inet_ntop2(sockaddr_storage *addr, char *buf, size_t size) {
   }
 
   return inet_ntop(sas->ss_family, src, buf, size);
+}
+
+bool str2int(const std::string &s, int64_t &out) {
+  char *end = nullptr;
+  errno = 0;
+  out = strtoll(s.c_str(), &end, 10);
+  return !(end == s.c_str() || *end != '\0' || errno == ERANGE);
+}
+
+bool str2dbl(const std::string &s, double &out) {
+  char *end = nullptr;
+  errno = 0;
+  out = strtod(s.c_str(), &end);
+  return !(end == s.c_str() || *end != '\0' || errno == ERANGE ||
+           !std::isfinite(out));
 }

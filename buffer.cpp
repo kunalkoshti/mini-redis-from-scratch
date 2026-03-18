@@ -65,16 +65,37 @@ void Buffer::consume(size_t len) {
   }
 }
 
-void Buffer::resize(size_t new_cap) {
-  if (new_cap <= cap) {
-    data_end = data_start + new_cap;
-    return;
+bool Buffer::reserve(size_t capacity) {
+  if (capacity <= cap) {
+    return true;
   }
-  uint8_t *new_storage = (uint8_t *)realloc(storage, new_cap);
+  uint8_t *new_storage = (uint8_t *)realloc(storage, capacity);
   if (!new_storage)
-    return; // OOM, keep existing buffer
+    return false;
   storage = new_storage;
-  cap = new_cap;
+  cap = capacity;
+  return true;
+}
+
+bool Buffer::resize(size_t new_size) {
+  if (cap - data_start < new_size) {
+    compact();
+    if (cap < new_size) {
+      size_t new_cap = cap == 0 ? 1024 : cap;
+      while (new_cap < new_size) {
+        new_cap *= 2;
+      }
+      if (!reserve(new_cap)) {
+        return false;
+      }
+    }
+  }
+  size_t current_size = size();
+  if (new_size > current_size) {
+    memset(storage + data_end, 0, new_size - current_size);
+  }
+  data_end = data_start + new_size;
+  return true;
 }
 
 // Returns false on allocation failure (OOM)
@@ -87,9 +108,12 @@ bool Buffer::append(const uint8_t *src, size_t len) {
     if (data_end + len > cap) {
       // Need to grow
       size_t new_cap = cap == 0 ? 1024 : cap;
-      while (new_cap < data_end + len)
+      while (new_cap < data_end + len) {
         new_cap *= 2;
-      resize(new_cap);
+      }
+      if (!reserve(new_cap)) {
+        return false;
+      }
     }
   }
   memcpy(storage + data_end, src, len);

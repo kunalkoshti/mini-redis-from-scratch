@@ -7,6 +7,7 @@
 
 #include "conn.h"
 #include "hashtable.h"
+#include "zset.h"
 #include <stdint.h>
 #include <string>
 #include <variant>
@@ -16,10 +17,11 @@
 //   std::string  — set via SET
 //   int64_t      — set via SETINT, INCR, INCRBY
 //   double       — set via SETDBL
+//   ZSet *       — set via ZADD
 struct Entry {
   struct HNode node; // intrusive hashtable node
   std::string key;
-  std::variant<std::string, int64_t, double> val;
+  std::variant<std::string, int64_t, double, ZSet *> val;
 };
 
 /**

@@ -1,6 +1,12 @@
+.vscode
+
 client
 server_poll
 server_epoll
-tests
-tests_avl
-.vscode
+
+tests/tests
+tests/tests_avl
+tests/tests_kv_commands
+tests/tests_protocol
+tests/tests_zset
+tests/tests_zset_commands
