@@ -6,7 +6,7 @@
 const size_t k_max_msg = 32 << 20;
 const size_t k_max_args = 200 * 1000;
 
-// --- Type tags for serialized values ---
+// Type tags for serialized values
 
 enum {
   TAG_NIL = 0, // nil
@@ -17,7 +17,7 @@ enum {
   TAG_ARR = 5, // array
 };
 
-// --- Response serialization ---
+// Response serialization
 
 bool out_nil(Buffer &out) { return out.append_u8(TAG_NIL); }
 
@@ -61,7 +61,19 @@ bool out_arr(Buffer &out, size_t n) {
   return out.append_u32(htonl((uint32_t)n));
 }
 
-// --- Request parsing helpers ---
+bool out_begin_arr(Buffer &out, size_t &ctx) {
+  if (!out.append_u8(TAG_ARR) || !out.append_u32(htonl(0)))
+    return false;
+  ctx = out.size() - 4;
+  return true;
+}
+
+void out_end_arr(Buffer &out, size_t &ctx, uint32_t n) {
+  uint32_t nlen = htonl(n);
+  memcpy(out.data() + ctx, &nlen, 4);
+}
+
+// Request parsing helpers
 
 static bool read_u32(const uint8_t *&cur, const uint8_t *end, uint32_t &out) {
   if (cur + 4 > end) {
@@ -114,7 +126,7 @@ int32_t parse_req(const uint8_t *data, size_t size,
   return 0;
 }
 
-// --- Response framing ---
+// Response framing
 
 bool response_begin(Buffer &out, size_t *header) {
   *header = out.size();     // message header position
@@ -128,7 +140,9 @@ static size_t response_size(Buffer &out, size_t header) {
 bool response_end(Buffer &out, size_t header) {
   size_t msg_size = response_size(out, header);
   if (msg_size > k_max_msg) {
-    out.resize(header + 4);
+    if (!out.resize(header + 4)) {
+      return false;
+    }
     if (!out_err(out, ERR_TOO_BIG, "response is too big.",
                  strlen("response is too big."))) {
       return false;

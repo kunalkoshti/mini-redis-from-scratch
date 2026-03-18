@@ -25,7 +25,7 @@ enum {
   ERR_OVERFLOW = 4,      // integer overflow on INCR/INCRBY
 };
 
-// --- Response serialization (host → network byte order) ---
+// Response serialization (host → network byte order)
 
 bool out_nil(Buffer &out);
 bool out_str(Buffer &out, const char *s, size_t size);
@@ -33,8 +33,10 @@ bool out_int(Buffer &out, int64_t val);
 bool out_dbl(Buffer &out, double val);
 bool out_err(Buffer &out, uint32_t code, const char *msg, size_t size);
 bool out_arr(Buffer &out, size_t n);
+bool out_begin_arr(Buffer &out, size_t &ctx);
+void out_end_arr(Buffer &out, size_t &ctx, uint32_t n);
 
-// --- Request parsing (network → host byte order) ---
+//  Request parsing (network → host byte order)
 
 /**
  * Parse a request body into a list of string arguments.
@@ -45,7 +47,7 @@ bool out_arr(Buffer &out, size_t n);
 int32_t parse_req(const uint8_t *data, size_t size,
                   std::vector<std::string> &out);
 
-// --- Response framing ---
+// Response framing
 
 /**
  * Reserve 4 bytes in the buffer for the response length header.

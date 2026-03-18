@@ -26,7 +26,8 @@ public:
   uint8_t *data();
   const uint8_t *data() const;
   size_t size() const;
-  void resize(size_t new_cap);
+  bool reserve(size_t capacity);
+  bool resize(size_t new_size);
   bool empty() const;
 
   void consume(size_t len);

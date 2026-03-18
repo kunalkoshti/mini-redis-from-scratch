@@ -132,3 +132,46 @@ AVLNode *avl_del(AVLNode *node) {
   *from = victim;
   return root;
 }
+
+// Navigate from `node` by `offset` positions in sorted order.
+// Positive offset moves right (higher), negative moves left (lower).
+// Returns nullptr if the offset is out of bounds.
+AVLNode *avl_offset(AVLNode *node, int64_t offset) {
+  int64_t pos = 0;
+  while (offset != pos) {
+    if (pos < offset && pos + avl_cnt(node->right) >= offset) {
+      node = node->right;
+      pos += avl_cnt(node->left) + 1;
+    } else if (pos > offset && pos - avl_cnt(node->left) <= offset) {
+      node = node->left;
+      pos -= avl_cnt(node->right) + 1;
+    } else {
+      AVLNode *parent = node->parent;
+      if (!parent) {
+        return nullptr;
+      }
+      if (parent->right == node) {
+        pos -= avl_cnt(node->left) + 1;
+      } else {
+        pos += avl_cnt(node->right) + 1;
+      }
+      node = parent;
+    }
+  }
+  return node;
+}
+
+// Returns the 0-based rank (in-order position) of `node` in the tree.
+// Walks from node to root, accumulating left subtree sizes. O(log N).
+int64_t avl_rank(AVLNode *node) {
+  int64_t rank = avl_cnt(node->left);
+  AVLNode *new_node = node;
+  while (new_node->parent) {
+    AVLNode *parent = new_node->parent;
+    if (parent->right == new_node) {
+      rank += (avl_cnt(parent->left) + 1);
+    }
+    new_node = parent;
+  }
+  return rank;
+}

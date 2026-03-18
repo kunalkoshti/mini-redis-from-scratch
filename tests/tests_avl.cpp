@@ -11,8 +11,8 @@
  * Test 7:     Exhaustive insert/delete at every position
  */
 
-#include "avl.h"
-#include "utils.h"
+#include "../avl.h"
+#include "../utils.h"
 #include <assert.h>
 #include <iostream>
 #include <set>

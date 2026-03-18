@@ -38,3 +38,9 @@ inline uint32_t avl_cnt(AVLNode *node) {
 AVLNode *avl_fix(AVLNode *node);
 // Delete `node` from tree, returns new root
 AVLNode *avl_del(AVLNode *node);
+
+// Navigate from `node` by `offset` positions in sorted order. O(log N).
+AVLNode *avl_offset(AVLNode *node, int64_t offset);
+
+// Return 0-based in-order rank of `node`. O(log N).
+int64_t avl_rank(AVLNode *node);
