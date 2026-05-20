@@ -24,3 +24,4 @@ int32_t write_full(int fd, const char *buf, size_t n);
 const char *inet_ntop2(sockaddr_storage *addr, char *buf, size_t size);
 bool str2int(const std::string &s, int64_t &out);
 bool str2dbl(const std::string &s, double &out);
+uint64_t get_monotonic_msec();

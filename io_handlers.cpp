@@ -1,4 +1,5 @@
 #include "io_handlers.h"
+#include "list.h"
 #include "protocol.h"
 #include "utils.h"
 #include <arpa/inet.h>
@@ -10,6 +11,35 @@
 #include <unistd.h>
 
 static const size_t read_buffer_size = 64 * 1024;
+
+static void read_pending_remove(Conn *conn) {
+  if (conn->partial_read.in_list) {
+    dlist_detach(&conn->read_pending_node);
+    conn->partial_read.in_list = false;
+  }
+}
+
+static void read_pending_add(Conn *conn) {
+  if (!conn->partial_read.in_list) {
+    conn->partial_read.in_list = true;
+    dlist_insert_before(&g_read_pending_list, &conn->read_pending_node);
+  }
+}
+
+static void write_pending_remove(Conn *conn) {
+  if (conn->partial_write.in_list) {
+    dlist_detach(&conn->write_pending_node);
+    conn->partial_write.in_list = false;
+  }
+}
+
+static void write_pending_add(Conn *conn) {
+  if (!conn->partial_write.in_list) {
+    conn->partial_write.last_write_ms = get_monotonic_msec();
+    conn->partial_write.in_list = true;
+    dlist_insert_before(&g_write_pending_list, &conn->write_pending_node);
+  }
+}
 
 // Set socket to non-blocking mode for use with epoll edge-trigger
 void fd_set_nb(int fd) {
@@ -46,17 +76,24 @@ void handle_write(Conn *conn, int epfd) {
   while (!conn->outgoing.empty()) {
     ssize_t rv = write(conn->fd, conn->outgoing.data(), conn->outgoing.size());
     if (rv < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK)
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
+        write_pending_remove(conn);
+        write_pending_add(conn);
         return; // Kernel buffer full, wait for next EPOLLOUT
+      }
       if (errno == EINTR)
         continue;
       msg_errno("write() error");
       conn->is_closed = true;
       return;
     }
-    if (rv > 0)
+    if (rv > 0) {
       conn->outgoing.consume((size_t)rv);
+      conn->partial_write.last_write_ms = get_monotonic_msec();
+    }
   }
+
+  write_pending_remove(conn);
 
   // Done writing, stop listening for EPOLLOUT to avoid busy-wait
   struct epoll_event event = {};
@@ -75,8 +112,9 @@ void handle_read(Conn *conn, int epfd) {
     uint8_t buff[read_buffer_size];
     ssize_t rv = read(conn->fd, buff, read_buffer_size);
     if (rv < 0) {
-      if (errno == EAGAIN || errno == EWOULDBLOCK)
+      if (errno == EAGAIN || errno == EWOULDBLOCK) {
         break; // Socket drained
+      }
       if (errno == EINTR)
         continue;
       msg_errno("read() error");
@@ -93,6 +131,7 @@ void handle_read(Conn *conn, int epfd) {
       conn->is_closed = true;
       return;
     }
+    conn->partial_read.last_read_ms = get_monotonic_msec();
   }
 
   // Process all requests in the incoming buffer (pipelining)
@@ -100,8 +139,15 @@ void handle_read(Conn *conn, int epfd) {
     int result = try_one_request(conn);
     if (result == 1)
       continue;
-    if (result == 0)
+    if (result == 0) {
+      if (conn->incoming.size() > 0) {
+        read_pending_remove(conn);
+        read_pending_add(conn);
+      } else {
+        read_pending_remove(conn);
+      }
       break;
+    }
     conn->is_closed = true;
     return;
   }
