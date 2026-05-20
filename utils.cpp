@@ -8,6 +8,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <string>
+#include <time.h>
 #include <unistd.h>
 
 // FNV hash
@@ -104,4 +105,10 @@ bool str2dbl(const std::string &s, double &out) {
   out = strtod(s.c_str(), &end);
   return !(end == s.c_str() || *end != '\0' || errno == ERANGE ||
            !std::isfinite(out));
+}
+
+uint64_t get_monotonic_msec() {
+  struct timespec tv = {0, 0};
+  clock_gettime(CLOCK_MONOTONIC, &tv);
+  return uint64_t(tv.tv_sec) * 1000 + tv.tv_nsec / 1000 / 1000;
 }

@@ -1,6 +1,7 @@
 .vscode
 
 client
+client_persistent
 server_poll
 server_epoll
 
@@ -10,3 +11,4 @@ tests/tests_kv_commands
 tests/tests_protocol
 tests/tests_zset
 tests/tests_zset_commands
+tests/tests_timeouts

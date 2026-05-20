@@ -16,9 +16,10 @@ This project intentionally builds the server step-by-step (from echo server to t
 
 - Main server backend: `epoll` (edge-triggered, non-blocking)
 - Legacy backend for learning: `poll` server
-- Client: command-line binary protocol client
+- Clients: one-shot CLI client + persistent CLI client
 - Data types: `string`, `int64`, `double`, `zset`
 - Command families: KV + numeric + type introspection + sorted set operations
+- Connection safety: idle timeout + partial read/write I/O timeouts
 - License: MIT
 
 ## Table of Contents
@@ -59,7 +60,8 @@ The runtime data path in the main server (`server_epoll.cpp`) is:
 6. Dispatch to command handlers (`do_request`)
 7. Serialize typed response into `outgoing` buffer
 8. Flush writes when socket becomes writable
-9. Defer connection destruction until the end of the `epoll_wait` batch
+9. Run timer scheduler (`timers.cpp`) for idle/partial I/O deadlines
+10. Defer connection destruction until the end of the `epoll_wait` batch
 
 ## Repository Layout
 
@@ -68,8 +70,10 @@ The runtime data path in the main server (`server_epoll.cpp`) is:
 ├── server_epoll.cpp        # Main epoll event loop
 ├── server_poll.cpp         # Earlier poll-based learning server (echo-style)
 ├── client.cpp              # CLI client for sending commands
+├── client_persistent.cpp   # Persistent-connection CLI client (REPL-like)
 ├── io_handlers.{h,cpp}     # accept/read/write handlers for epoll server
 ├── conn.{h,cpp}            # connection objects and destruction helpers
+├── timers.{h,cpp}          # idle/partial read/partial write timeout scheduler
 ├── protocol.{h,cpp}        # request framing + parse + dispatch glue
 ├── serialization.{h,cpp}   # TLV response serialization + request decode helpers
 ├── commands.{h,cpp}        # command dispatch + global DB state
@@ -84,6 +88,7 @@ The runtime data path in the main server (`server_epoll.cpp`) is:
   ├── tests_protocol.cpp
   ├── tests_kv_commands.cpp
   ├── tests_zset_commands.cpp
+  ├── tests_timeouts.cpp
   ├── tests_avl.cpp
   ├── tests_zset.cpp
   └── tests_helpers.h
@@ -102,7 +107,7 @@ The runtime data path in the main server (`server_epoll.cpp`) is:
 
 ```bash
 g++ -O2 -Wall -Wextra -std=c++17 \
-  server_epoll.cpp conn.cpp io_handlers.cpp protocol.cpp serialization.cpp \
+  server_epoll.cpp timers.cpp conn.cpp io_handlers.cpp protocol.cpp serialization.cpp \
   commands.cpp commands_kv.cpp commands_zset.cpp buffer.cpp hashtable.cpp \
   zset.cpp avl.cpp utils.cpp -o server_epoll
 ```
@@ -111,6 +116,7 @@ g++ -O2 -Wall -Wextra -std=c++17 \
 
 ```bash
 g++ -O2 -Wall -Wextra -std=c++17 client.cpp utils.cpp -o client
+g++ -O2 -Wall -Wextra -std=c++17 client_persistent.cpp utils.cpp -o client_persistent
 ```
 
 ### Optional: build legacy poll server
@@ -312,6 +318,7 @@ The project includes both integration tests (against running server) and unit te
 g++ -O2 -Wall -Wextra -std=c++17 tests/tests_protocol.cpp utils.cpp -o tests_protocol
 g++ -O2 -Wall -Wextra -std=c++17 tests/tests_kv_commands.cpp utils.cpp -o tests_kv_commands
 g++ -O2 -Wall -Wextra -std=c++17 tests/tests_zset_commands.cpp utils.cpp -o tests_zset_commands
+g++ -O2 -Wall -Wextra -std=c++17 tests/tests_timeouts.cpp utils.cpp -o tests_timeouts
 g++ -O2 -Wall -Wextra -std=c++17 tests/tests_avl.cpp avl.cpp utils.cpp -o tests_avl
 g++ -O2 -Wall -Wextra -std=c++17 tests/tests_zset.cpp zset.cpp avl.cpp hashtable.cpp utils.cpp -o tests_zset
 ```
@@ -330,6 +337,7 @@ Then run:
 ./tests_protocol
 ./tests_kv_commands
 ./tests_zset_commands
+./tests_timeouts
 ./tests_avl
 ./tests_zset
 ```
@@ -419,7 +427,7 @@ The server explicitly defends against common protocol and event-loop failure mod
 - Not RESP-compatible yet (uses custom binary protocol)
 - Single-threaded event loop
 - No persistence (in-memory only)
-- No replication, transactions, TTL/expiry, auth, or ACLs
+- No replication, transactions, key-level TTL/expiry commands, auth, or ACLs
 - No eviction policy
 - Command set is intentionally limited
 

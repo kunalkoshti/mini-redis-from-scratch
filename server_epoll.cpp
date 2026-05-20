@@ -1,5 +1,6 @@
 #include "conn.h"
 #include "io_handlers.h"
+#include "timers.h"
 #include "utils.h"
 #include <errno.h>
 #include <netdb.h>
@@ -13,6 +14,8 @@
 #define MAX_EVENTS 64
 
 int main() {
+  init_conn_state();
+
   // Setup listening socket
   struct addrinfo hints = {}, *res;
   hints.ai_family = AF_UNSPEC;
@@ -61,7 +64,8 @@ int main() {
 
   struct epoll_event events[MAX_EVENTS];
   while (true) {
-    int n = epoll_wait(epfd, events, MAX_EVENTS, -1);
+    int32_t timeout_ms = next_timer_ms();
+    int n = epoll_wait(epfd, events, MAX_EVENTS, timeout_ms);
     if (n == -1) {
       if (errno == EINTR)
         continue;
@@ -92,10 +96,16 @@ int main() {
             close(fd);
           } else {
             // Transfer ownership to global table
+            client_conn->last_active_ms = get_monotonic_msec();
+            dlist_init(&client_conn->idle_node);
+            dlist_insert_before(&g_idle_list, &client_conn->idle_node);
             fd2conn[fd] = std::move(client_conn);
           }
         }
       } else {
+        conn->last_active_ms = get_monotonic_msec();
+        dlist_detach(&conn->idle_node);
+        dlist_insert_before(&g_idle_list, &conn->idle_node);
         if (!conn->is_closed && (events[i].events & EPOLLIN))
           handle_read(conn, epfd);
 
@@ -111,6 +121,7 @@ int main() {
       }
     }
     connection_destroy_multiple(to_close, epfd);
+    process_timers(epfd);
   }
   return 0;
 }
