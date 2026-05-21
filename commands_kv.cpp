@@ -113,6 +113,16 @@ bool do_set_dbl(std::string &key, std::string &val_str, Buffer &out) {
   return out_nil(out);
 }
 
+void entry_del(Entry *e) {
+  if (std::holds_alternative<ZSet *>(e->val)) {
+    ZSet *zset = std::get<ZSet *>(e->val);
+    zset_clear(zset);
+    delete zset;
+  }
+  entry_set_ttl(e, -1); // remove from TTL heap if exists
+  delete e;
+}
+
 // DEL <key> → removes the key, returns 1 if deleted, 0 if not found
 bool do_del(std::string &key, Buffer &out) {
   Entry entry;
@@ -121,12 +131,7 @@ bool do_del(std::string &key, Buffer &out) {
   HNode *node = hm_delete(&g_data.db, &entry.node, &entry_eq);
   if (node) {
     Entry *e = container_of(node, Entry, node);
-    if (std::holds_alternative<ZSet *>(e->val)) {
-      ZSet *zset = std::get<ZSet *>(e->val);
-      zset_clear(zset);
-      delete zset;
-    }
-    delete e;
+    entry_del(e);
   }
   return out_int(out, node ? 1 : 0);
 }

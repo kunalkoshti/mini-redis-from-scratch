@@ -20,6 +20,7 @@
 //   ZSet *       — set via ZADD
 struct Entry {
   struct HNode node; // intrusive hashtable node
+  size_t heap_idx = -1;
   std::string key;
   std::variant<std::string, int64_t, double, ZSet *> val;
 };

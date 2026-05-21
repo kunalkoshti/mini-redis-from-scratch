@@ -19,6 +19,7 @@ This project intentionally builds the server step-by-step (from echo server to t
 - Clients: one-shot CLI client + persistent CLI client
 - Data types: `string`, `int64`, `double`, `zset`
 - Command families: KV + numeric + type introspection + sorted set operations
+- Key TTL: `pexpire` / `pttl` (ms), scheduled via min-heap
 - Connection safety: idle timeout + partial read/write I/O timeouts
 - License: MIT
 
@@ -35,8 +36,8 @@ This project intentionally builds the server step-by-step (from echo server to t
 9. [Robustness and Security Notes](#robustness-and-security-notes)
 10. [Project Evolution (Commit Milestones)](#project-evolution-commit-milestones)
 11. [Known Limitations](#known-limitations)
-12. [Benchmarks](#benchmarks)
-13. [Active Development: TTL & Heaps](#active-development-ttl-heaps)
+12. [TTL (Key Expiration)](#ttl-key-expiration)
+13. [Benchmarking](#benchmarking-methodology)
 
 ## Why This Project
 
@@ -63,6 +64,12 @@ The runtime data path in the main server (`server_epoll.cpp`) is:
 9. Run timer scheduler (`timers.cpp`) for idle/partial I/O deadlines
 10. Defer connection destruction until the end of the `epoll_wait` batch
 
+Timeout defaults (current):
+
+- idle timeout: 5s
+- partial read timeout: 2s
+- partial write timeout: 3s
+
 ## Repository Layout
 
 ```text
@@ -78,20 +85,23 @@ The runtime data path in the main server (`server_epoll.cpp`) is:
 ├── serialization.{h,cpp}   # TLV response serialization + request decode helpers
 ├── commands.{h,cpp}        # command dispatch + global DB state
 ├── commands_kv.cpp         # GET/SET/DEL/INCR/TYPE/KEYS handlers
+├── commands_ttl.cpp        # PTTL/PEXPIRE handlers + TTL heap bookkeeping
 ├── commands_zset.cpp       # ZADD/ZREM/ZSCORE/ZQUERY/ZRANK/ZCOUNT handlers
 ├── buffer.{h,cpp}          # custom growable buffer with O(1) consume
 ├── hashtable.{h,cpp}       # intrusive chaining hashmap + progressive rehashing
+├── heap.{h,cpp}            # binary min-heap (used for TTL expiry scheduling)
 ├── avl.{h,cpp}             # intrusive AVL tree with rank/offset support
 ├── zset.{h,cpp}            # sorted set built from AVL + hashmap
 ├── utils.{h,cpp}           # hash, parse helpers, socket read/write utilities
 ├── tests/
-  ├── tests_protocol.cpp
-  ├── tests_kv_commands.cpp
-  ├── tests_zset_commands.cpp
-  ├── tests_timeouts.cpp
-  ├── tests_avl.cpp
-  ├── tests_zset.cpp
-  └── tests_helpers.h
+   ├── tests_protocol.cpp
+   ├── tests_kv_commands.cpp
+   ├── tests_ttl_commands.cpp
+   ├── tests_zset_commands.cpp
+   ├── tests_timeouts.cpp
+   ├── tests_avl.cpp
+   ├── tests_zset.cpp
+   └── tests_helpers.h
 ```
 
 ---
@@ -107,9 +117,9 @@ The runtime data path in the main server (`server_epoll.cpp`) is:
 
 ```bash
 g++ -O2 -Wall -Wextra -std=c++17 \
-  server_epoll.cpp timers.cpp conn.cpp io_handlers.cpp protocol.cpp serialization.cpp \
-  commands.cpp commands_kv.cpp commands_zset.cpp buffer.cpp hashtable.cpp \
-  zset.cpp avl.cpp utils.cpp -o server_epoll
+   server_epoll.cpp timers.cpp conn.cpp io_handlers.cpp protocol.cpp serialization.cpp \
+   commands.cpp commands_kv.cpp commands_ttl.cpp commands_zset.cpp buffer.cpp hashtable.cpp heap.cpp \
+   zset.cpp avl.cpp utils.cpp -o server_epoll
 ```
 
 ### Build client
@@ -226,6 +236,8 @@ All commands are lowercase in current handler dispatch.
 | `incr` | `key` | Increment int64 by 1 (auto-create missing key) | new integer value |
 | `incrby` | `key delta` | Add signed int64 delta (auto-create missing key) | new integer value |
 | `type` | `key` | Inspect stored type | `"string"`, `"int"`, `"double"`, `"zset"`, or `nil` |
+| `pttl` | `key` | Remaining TTL in ms | `int` (ms), `-1` if no TTL, or `nil` if missing |
+| `pexpire` | `key ttl_ms` | Set TTL in ms | `1` if TTL updated, `nil` if missing key, or type error |
 
 Notes:
 
@@ -306,6 +318,31 @@ Combines:
 
 Per-member node embeds both intrusive nodes (`AVLNode` + `HNode`) and stores flexible-array member name bytes.
 
+### 5) `DList` (intrusive doubly-linked list)
+
+Why it exists:
+
+- O(1) attach/detach without allocation
+
+Used for:
+
+- connection timer queues (idle and partial read/write deadline lists)
+
+Implementation is a sentinel-head circular list with helpers like `dlist_init`, `dlist_empty`, `dlist_detach`, and `dlist_insert_before`.
+
+### 6) TTL min-heap (`HeapItem` + `heap_update`)
+
+Why it exists:
+
+- efficiently schedule the next key expiration (peek-min)
+
+Design:
+
+- global min-heap of absolute expiration timestamps in ms
+- each heap element stores a pointer to its owning entry’s heap index so updates/deletes stay O(log N)
+
+Used by TTL commands (`pexpire`/`pttl`) and the timer tick to expire keys.
+
 ---
 
 ## Testing
@@ -317,6 +354,7 @@ The project includes both integration tests (against running server) and unit te
 ```bash
 g++ -O2 -Wall -Wextra -std=c++17 tests/tests_protocol.cpp utils.cpp -o tests_protocol
 g++ -O2 -Wall -Wextra -std=c++17 tests/tests_kv_commands.cpp utils.cpp -o tests_kv_commands
+g++ -O2 -Wall -Wextra -std=c++17 tests/tests_ttl_commands.cpp utils.cpp -o tests_ttl_commands
 g++ -O2 -Wall -Wextra -std=c++17 tests/tests_zset_commands.cpp utils.cpp -o tests_zset_commands
 g++ -O2 -Wall -Wextra -std=c++17 tests/tests_timeouts.cpp utils.cpp -o tests_timeouts
 g++ -O2 -Wall -Wextra -std=c++17 tests/tests_avl.cpp avl.cpp utils.cpp -o tests_avl
@@ -336,6 +374,7 @@ Then run:
 ```bash
 ./tests_protocol
 ./tests_kv_commands
+./tests_ttl_commands
 ./tests_zset_commands
 ./tests_timeouts
 ./tests_avl
@@ -427,11 +466,24 @@ The server explicitly defends against common protocol and event-loop failure mod
 - Not RESP-compatible yet (uses custom binary protocol)
 - Single-threaded event loop
 - No persistence (in-memory only)
-- No replication, transactions, key-level TTL/expiry commands, auth, or ACLs
+- No replication, transactions, auth, or ACLs
 - No eviction policy
 - Command set is intentionally limited
 
 ---
+
+## TTL (Key Expiration)
+
+TTL support is implemented using a global min-heap scheduler:
+
+- `pexpire <key> <ttl_ms>`: set/update a key TTL (milliseconds)
+- `pttl <key>`: query remaining TTL (milliseconds)
+
+Notes:
+
+- Missing keys return `nil` (both commands)
+- `pttl` returns `-1` when a key has no TTL
+- `pexpire` with a negative TTL removes the TTL (persist semantics)
 
 ## Benchmarking Methodology
 
@@ -717,14 +769,3 @@ The following table shows the individual performance of every implemented comman
 At 100 concurrent clients, the server achieves near-maximum throughput of **~173,700 req/s** with 4KB payloads. The P50 latency of **5.8 ms** remains extremely stable across all operations, including complex Sorted Set updates (`zadd`) and range queries (`zquery`). This performance consistency highlights how the intrusive data structure design (AVL + Hash) and the custom zero-copy buffer management together eliminate processing jitter and prevent the tail latency from exploding, even when data structures are heavily stressed.
 
 ---
-
-## Active Development: TTL & Heaps
-
-The next major feature currently in development is **Time-to-Live (TTL)** support for keys, which involves:
-
-- **Goal**: Implement automated key expiration using a dedicated timer system.
-- **Data Structure**: A binary **min-heap** for optimal $O(1)$ retrieval of the nearest timer and $O(\log N)$ updates.
-- **New Commands**:
-  - `EXPIRE <key> <ms>`: Set a time-to-live for a key.
-  - `TTL <key>`: Check the remaining time for a key.
-  - `PERSIST <key>`: Remove expiration from a key.
