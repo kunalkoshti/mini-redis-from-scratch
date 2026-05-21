@@ -12,3 +12,4 @@ tests/tests_protocol
 tests/tests_zset
 tests/tests_zset_commands
 tests/tests_timeouts
+tests/tests_ttl_commands

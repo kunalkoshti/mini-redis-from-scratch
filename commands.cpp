@@ -70,6 +70,10 @@ bool do_request(std::vector<std::string> &cmd, Buffer &out) {
     return do_zrank(cmd[1], cmd[2], out);
   } else if (cmd.size() == 4 && cmd[0] == "zcount") {
     return do_zcount(cmd, out);
+  } else if (cmd.size() == 3 && cmd[0] == "pexpire") {
+    return do_expire(cmd[1], cmd[2], out);
+  } else if (cmd.size() == 2 && cmd[0] == "pttl") {
+    return do_ttl(cmd[1], out);
   } else {
     return out_err(out, ERR_UNKNOWN, "unknown command.",
                    strlen("unknown command."));
